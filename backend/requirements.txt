@@ -11,3 +11,4 @@ pillow
 safetensors
 torch
 python-decouple>=3.8
+openai>=2.6.1
