@@ -14,22 +14,25 @@ from PIL import Image
 import uvicorn
 from decouple import config as env_config
 
+from openai import OpenAI
+
 # -----------------------------
 # Lifespan context for model loading
 # -----------------------------
 model = None
 tokenizer = None
+client = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load model on startup, cleanup on shutdown"""
-    global model, tokenizer
+    global model, tokenizer, client
     
     # Environment setup
     os.environ.pop("TRANSFORMERS_CACHE", None)
-    MODEL_NAME = env_config("MODEL_NAME", default="deepseek-ai/DeepSeek-OCR")
-    HF_HOME = env_config("HF_HOME", default="/models")
-    os.makedirs(HF_HOME, exist_ok=True)
+    MODEL_NAME = env_config("MODEL_NAME", default="/media/qducc/models/deepseek-ai/DeepSeek-OCR")
+    # HF_HOME = env_config("HF_HOME", default="/models")
+    # os.makedirs(HF_HOME, exist_ok=True)
     
     # Load model
     print(f"🚀 Loading {MODEL_NAME}...")
@@ -58,6 +61,11 @@ async def lifespan(app: FastAPI):
         pass
     
     print("✅ Model loaded and ready!")
+    # Initialize OpenAI client pointing to local LLM API
+    client = OpenAI(
+        base_url="https://api.deepseek.com/v1",
+        api_key="xxx"  # Local API may not require key
+    )
     
     yield
     
@@ -102,7 +110,7 @@ def build_prompt(
 
     instruction = ""
     if mode == "plain_ocr":
-        instruction = "Free OCR."
+        instruction = "Free OCR. Only output the raw text."
     elif mode == "markdown":
         instruction = "Convert the document to markdown."
     elif mode == "tables_csv":
@@ -141,7 +149,8 @@ def build_prompt(
     elif mode == "describe":
         instruction = "Describe this image. Focus on visible key elements."
     elif mode == "freeform":
-        instruction = user_prompt.strip() if user_prompt else "OCR this image."
+        # instruction = user_prompt.strip() if user_prompt else "OCR this image."
+        instruction = "Free OCR. Only output the raw text"
     else:
         instruction = "OCR this image."
 
@@ -284,6 +293,7 @@ async def ocr_inference(
         schema=schema,
         include_caption=include_caption,
     )
+    print(f"prompt_text {prompt_text}")
     
     tmp_img = None
     out_dir = None
@@ -345,6 +355,39 @@ async def ocr_inference(
         # If display text is empty after cleaning but we have boxes, show the labels
         if not display_text and boxes:
             display_text = ", ".join([b["label"] for b in boxes])
+
+        # Call LLM API for freeform mode
+        if mode == "freeform" and display_text:
+            try:
+                print("=" * 50)
+                print("🤖 Calling LLM API for freeform mode...")
+                print(f"📝 User prompt: {prompt}")
+                print(f"📄 Recognized text: {display_text}")
+
+                # Call the local LLM API
+                response = client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that processes OCR text based on user instructions."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"User instruction: {prompt}\n\nOCR recognized text:\n{display_text}\n\nPlease process the text according to the user instruction."
+                        }
+                    ]
+                )
+
+                llm_content = response.choices[0].message.content
+                print("✅ LLM API Response:")
+                print(llm_content)
+                print("=" * 50)
+                display_text = llm_content
+
+            except Exception as e:
+                print(f"❌ LLM API call failed: {e}")
+                print("=" * 50)
         
         return JSONResponse({
             "success": True,
