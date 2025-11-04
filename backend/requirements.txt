@@ -12,3 +12,4 @@ safetensors
 torch
 python-decouple>=3.8
 openai>=2.6.1
+torchvision>=0.24.0
